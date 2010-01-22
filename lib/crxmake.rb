@@ -4,9 +4,35 @@ require 'rubygems'
 require 'zipruby'
 require 'openssl'
 require 'digest/sha1'
+require 'digest/sha2'
 require 'fileutils'
 require 'find'
 require 'pathname'
+require 'json'
+
+class ExtensionInfo
+  attr_reader :id, :name, :version
+  def initialize public_key, path
+    @id = generate_id(public_key)
+    @path = path
+    load_manifest
+  end
+
+  private
+  def load_manifest
+    json_data = File.read(File.join(@path, 'manifest.json'))
+    manifest_data = JSON.parse(json_data)
+    @name = manifest_data['name']
+    @version = manifest_data['version']
+  end
+
+  def generate_id public_key
+    hex_id = Digest::SHA2.hexdigest(public_key)
+    hex_id[0...32].split('').map do |char|
+      (char.hex + 'a'[0]).chr
+    end.join
+  end
+end
 
 class CrxMake < Object
   VERSION = '2.0.2'
@@ -33,6 +59,10 @@ class CrxMake < Object
     end
     create_zip
     sign_zip
+    if block_given?
+      @crx = File.expand_path(yield(ExtensionInfo.new(@@key_algo + @key.public_key.to_der, @exdir)))
+      raise "crx path is directory" if File.directory?(@crx)
+    end
     write_crx
   ensure
     final
@@ -43,6 +73,11 @@ class CrxMake < Object
     unless @pkey
       generate_key
       @pkey = @pkey_o
+    end
+    if block_given?
+      read_key unless @key
+      @zip = File.expand_path(yield(ExtensionInfo.new(@@key_algo + @key.public_key.to_der, @exdir)))
+      raise "zip path is directory" if File.directory?(@zip)
     end
     create_zip do |zip|
       puts "include pem key: \"#{@pkey}\"" if @verbose
@@ -218,12 +253,12 @@ zip file at \"#{@zip}\"
   end
 
   class << self
-    def make opt
-      new(opt).make
+    def make opt, &block
+      new(opt).make &block
     end
 
-    def zip opt
-      new(opt).zip
+    def zip opt, &block
+      new(opt).zip &block
     end
   end
 end
